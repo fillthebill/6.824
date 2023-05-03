@@ -15,16 +15,21 @@ import "plugin"
 import "os"
 import "fmt"
 import "log"
+import "strconv"
 
 func main() {
-	if len(os.Args) != 2 {
+	// originally 2
+	if len(os.Args) != 3 {
 		fmt.Fprintf(os.Stderr, "Usage: mrworker xxx.so\n")
 		os.Exit(1)
 	}
 
 	mapf, reducef := loadPlugin(os.Args[1])
-
-	mr.Worker(mapf, reducef)
+	num , err := strconv.Atoi(os.Args[2])
+	if err != nil {
+	}
+	mr.Worker(mapf, reducef, num)
+	//mr.Worker(mapf, reducef)
 }
 
 //

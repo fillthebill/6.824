@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/ bash
 
 #
 # map-reduce tests
@@ -44,17 +44,30 @@ mkdir mr-tmp || exit 1
 cd mr-tmp || exit 1
 rm -f mr-*
 
+echo '***' Starting rebuid plugins.
 # make sure software is freshly built.
 (cd ../../mrapps && go clean)
 (cd .. && go clean)
+#(cd ..)
+
+echo '***' Starting go clean 
+#go clean 
+echo '***' Starting rebuid pluginsp0
 (cd ../../mrapps && go build $RACE -buildmode=plugin wc.go) || exit 1
+echo '***' Starting rebuid plugins1.
 (cd ../../mrapps && go build $RACE -buildmode=plugin indexer.go) || exit 1
+echo '***' Starting rebuid plugins2.
 (cd ../../mrapps && go build $RACE -buildmode=plugin mtiming.go) || exit 1
+echo '***' Starting rebuid plugins3j.
 (cd ../../mrapps && go build $RACE -buildmode=plugin rtiming.go) || exit 1
+echo '***' Starting rebuid plugins4.
 (cd ../../mrapps && go build $RACE -buildmode=plugin jobcount.go) || exit 1
 (cd ../../mrapps && go build $RACE -buildmode=plugin early_exit.go) || exit 1
 (cd ../../mrapps && go build $RACE -buildmode=plugin crash.go) || exit 1
 (cd ../../mrapps && go build $RACE -buildmode=plugin nocrash.go) || exit 1
+
+echo '***' Starting rebuid coordinators and workers.
+
 (cd .. && go build $RACE mrcoordinator.go) || exit 1
 (cd .. && go build $RACE mrworker.go) || exit 1
 (cd .. && go build $RACE mrsequential.go) || exit 1
@@ -66,6 +79,11 @@ failed_any=0
 
 # generate the correct output
 ../mrsequential ../../mrapps/wc.so ../pg*txt || exit 1
+
+
+
+echo about to sort .....
+sleep 60
 sort mr-out-0 > mr-correct-wc.txt
 rm -f mr-out*
 
@@ -97,6 +115,9 @@ else
   failed_any=1
 fi
 
+
+  echo '---' wc test: about to sleep for 300s 
+sleep 300
 # wait for remaining workers and coordinator to exit.
 wait
 

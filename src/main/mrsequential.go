@@ -35,6 +35,7 @@ func main() {
 	// pass it to Map,
 	// accumulate the intermediate Map output.
 	//
+	filecounter := 0
 	intermediate := []mr.KeyValue{}
 	for _, filename := range os.Args[2:] {
 		file, err := os.Open(filename)
@@ -47,6 +48,15 @@ func main() {
 		}
 		file.Close()
 		kva := mapf(filename, string(content))
+
+		tname := fmt.Sprintf("%s%d", "seq-out-", filecounter)
+		filecounter++
+		tfile, _ := os.Create(tname)
+
+		for i := 0; i < len(kva); i++{
+			
+		  fmt.Fprintf(tfile, "%v %v\n", kva[i].Key, kva[i].Value)
+		}
 		intermediate = append(intermediate, kva...)
 	}
 
@@ -95,16 +105,21 @@ func loadPlugin(filename string) (func(string, string) []mr.KeyValue, func(strin
 	if err != nil {
 		log.Fatalf("cannot load plugin %v", filename)
 	}
+
+
 	xmapf, err := p.Lookup("Map")
 	if err != nil {
 		log.Fatalf("cannot find Map in %v", filename)
 	}
 	mapf := xmapf.(func(string, string) []mr.KeyValue)
+
+
 	xreducef, err := p.Lookup("Reduce")
 	if err != nil {
 		log.Fatalf("cannot find Reduce in %v", filename)
 	}
 	reducef := xreducef.(func(string, []string) string)
+
 
 	return mapf, reducef
 }
