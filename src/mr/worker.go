@@ -7,6 +7,10 @@ import "log"
 import "net/rpc"
 import "hash/fnv"
 import "strconv"
+import "time"
+import "regexp"
+import "sort"
+import "encoding/json"
 
 //
 // Map functions return a slice of KeyValue.
@@ -16,10 +20,20 @@ type KeyValue struct {
 	Value string
 }
 
+type ByKey []KeyValue
 
-type MrTask struct {
-	Filename string
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
+type MRTask struct {
+	// Tasktype could be: map, reduce, wait or exit
 	Tasktype string
+	MapFileName string
+	MapTaskNum int
+	ReduceTaskNum int
+	nReduce int
 }
 
 //
@@ -37,51 +51,181 @@ func ihash(key string) int {
 // main/mrworker.go calls this function.
 //
 func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string, num int) {
+	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
 
 	// uncomment to send the Example RPC to the coordinator.
 
 	// as the first step in implementing mr, we implement map function first.
+	// fetch a task. work according to task type
 
-	var maptask MrTask 
+	// if rpc all fails, exit
+	var assignedtask MRTask
 	mock := ExampleArgs{}
-	ok := call("Coordinator.AssignMapTask", mock, &maptask)
-	if ok {
-		fmt.Printf("map task fetched successfully, file name is %v\n", maptask.Filename)
-	} else {
-		fmt.Printf("map task fetching failed!\n")
+
+	for {
+		ok := call("Coordinator.AssignTask", mock, &assignedtask)
+		if ok != true {
+		  os.Exit(1)
+		}
+		if assignedtask.Tasktype == "map" || assignedtask.Tasktype == "reduce" {
+		//debug("task type : " + assignedtask.Tasktype)
+
+			if assignedtask.Tasktype == "map" {
+				var fname string
+				fname = "mapwork, filename is "
+				fname += assignedtask.MapFileName
+				fname += "nreduce is"
+				fname += strconv.Itoa(assignedtask.nReduce)
+				debug(fname)
+				mapwork(mapf, assignedtask)
+			} else {
+				reducework(reducef, assignedtask)
+
+			}
+
+		}
+		if assignedtask.Tasktype == "exit" {
+				debug("task type : " + assignedtask.Tasktype)
+			os.Exit(1)
+		} else {
+			if assignedtask.Tasktype != "wait" {
+		//		debug("wierd task type : " + assignedtask.Tasktype)
+			}
+			time.Sleep(1)
+
+		}
+
 	}
 
-
-	tfile, err := os.Open(maptask.Filename)
-	if err != nil{
-		
-		fmt.Printf("open the file to be mapped failed!\n")
-	}
-	content, err := ioutil.ReadAll(tfile)
-	if err != nil {
-		fmt.Printf("read content of the file to be mapped failed!\n")
-	}
-
-	mapresult := mapf(maptask.Filename, string(content)) 
-
-
-	filenum := strconv.Itoa(num)
-	if err != nil {
-		debug("strconv failure")	
-	}
-	secname := fmt.Sprintf("%s%d", "my-out-", filenum)
-	secfile, err := os.Create(secname) 
-	if err != nil {
-		debug("file creation failuer\n")
-		log.Fatal(err)
-	}
-	for i :=0; i < len(mapresult); i++ {
-		fmt.Fprintf(secfile, "%v %v\n", mapresult[i].Key, mapresult[i].Value)
-	}
 }
+
+func mapwork(mapf func(string, string) []KeyValue, Task MRTask) {
+	nReduce := 10 
+	//retrieve map result
+	file, err := os.Open(Task.MapFileName)
+	if err != nil {
+		log.Fatalf("open file %v failed \n", Task.MapFileName);
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("read file %v failed \n", Task.MapFileName);
+	}
+	file.Close()
+	kva := mapf(Task.MapFileName, string(content))
+	// write into temp files, hashing int onRduce files.
+	tempFilesNames := make([]string, nReduce)
+	OpenedTempFiles := make([]*os.File, nReduce)
+	encs := make([]*json.Encoder, nReduce)
+	//FileNames := make([]string, nReduce)
+
+// file name init, file creation
+	for i := 0; i < nReduce; i++ {
+		tempFilesNames[i] = "f"+ strconv.Itoa(Task.MapTaskNum) + strconv.Itoa(i)
+		t,  _ := os.Create(tempFilesNames[i])
+		OpenedTempFiles[i] = t
+		encs[i] = json.NewEncoder(OpenedTempFiles[i])
+	}
+
+// kv pairs encoding
+kvlen := len(kva)
+	for j:=0; j < kvlen; j++ {
+		n := ihash(kva[j].Key) % nReduce
+		encs[n].Encode(&kva[j])
+	}
+//
+	for i := 0; i < nReduce; i++ {
+		mapname := "mr-"+strconv.Itoa(Task.MapTaskNum)+"-"+strconv.Itoa(i)
+		os.Rename(tempFilesNames[i], mapname)
+	}
+
+	info := "before finishing..., task type is"
+	info += Task.Tasktype
+	info += strconv.Itoa(Task.MapTaskNum)
+	debug(info)
+	var reply MRTask
+	ok := call("Coordinator.TaskFinished", &Task, &reply)
+	if ok {
+	//	fmt.Printf("finish task succeed!!\n");
+	}else {
+		fmt.Printf("finish task failed\n");
+	}
+
+}
+
+func reducework(reducef func(string, []string) string, Task MRTask) {
+	F2reduce := make(map[string]bool)
+	fileNames, err := ioutil.ReadDir(".")
+	if err != nil {
+		log.Fatalf("open cur dir failed\n")
+	}
+	var f2reg = "(mr-.-"
+	f2reg += strconv.Itoa(Task.ReduceTaskNum)
+	f2reg += ")"
+
+	re := regexp.MustCompile(f2reg)
+	for _, f := range fileNames {
+		if re.MatchString(f.Name()) {
+		  F2reduce[f.Name()] = true
+		  fmt.Printf("name matched for reduce %v, \n", f.Name());
+		}
+	}
+// write in temp file
+	var tempname string
+	tempname = "temp-out-"+ strconv.Itoa(Task.ReduceTaskNum)
+	tf, _ := os.Create(tempname)
+	for f, _ := range F2reduce {
+		// open, decode, reduce, write
+		fo, _ := os.Open(f)
+		dec := json.NewDecoder(fo)
+		var fcontent []KeyValue
+		for {
+			var kv KeyValue
+			err := dec.Decode(&kv)
+			if err != nil {
+				break
+			}
+			fcontent = append(fcontent, kv)
+
+		}
+		sort.Sort(ByKey(fcontent))
+		i := 0
+		lenf := len(fcontent)
+		for i < lenf {
+			j := i+1
+			var content4key []string
+			for j < lenf && fcontent[j].Key == fcontent[i].Key {
+				content4key = append(content4key,fcontent[j].Value )
+				j++
+			}
+			output := reducef(fcontent[i].Key, content4key)
+			fmt.Fprintf(tf, "%v, %v\n", fcontent[i].Key, output);
+			i = j
+
+		}
+	}
+// taskfinished
+
+	var reply MRTask
+	ok := call("Coordinator.TaskFinished", &Task, &reply)
+	// change file names
+
+
+	if ok {
+		fmt.Printf("finish task succeed!!\n");
+	}else {
+		fmt.Printf("finish task failed\n");
+	}
+
+	var finalname string
+	finalname = "mr-out-" + strconv.Itoa(Task.ReduceTaskNum)
+
+
+	os.Rename(tempname, finalname)
+// rename tempfile
+}
+
 
 
 //func (FileNum int, Task string) AskForTaskFromCoordinator() {
